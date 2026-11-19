@@ -68,8 +68,13 @@ with pull-ups. P2.3/P2.4 hold the 32-kHz crystal.
   - the pair is held for 30 s, which is treated as a stuck key.
 - **Stuck contacts.** After 30 s without a change the firmware samples
   only once a second; a new button still wakes it at once.
-- **First start.** With no saved channel, settings from another firmware,
-  or no key, the device commissions by itself.
+- **First start or reset.** With no saved channel, settings from another
+  firmware or no key, the device commissions by itself. So it does after a
+  power-on reset (battery insertion, also a brown-out) or a RESET_N reset
+  (a CC Debugger reset), so it can pair again without its buttons; a sink
+  whose commissioning window is closed ignores the frames. A watchdog
+  restart does not commission. `GPD_DEFINES=-DGPD_RESET_COMMISSION=0`
+  limits it to the first start.
 
 ## LEDs
 
@@ -183,7 +188,8 @@ A chip erase (`cc-tool -e`) therefore means a first start and a new key.
    `<HA config>/custom_zha_quirks/` and restart Home Assistant. This needs a
    ZHA build with Green Power support.
 2. Permit joining.
-3. Insert the battery (first start), or hold Mic + OK for 3–10 s and release.
+3. Insert the battery (or reset the chip with the CC Debugger), or hold
+   Mic + OK for 3–10 s and release.
 
 The quirk matches DeviceID 0x07, manufacturer 0x6D6B and model 0xF500. It
 adds:
@@ -205,8 +211,9 @@ Mic + OK gesture also fires its normal events.
 
 ## Flashing
 
-The stock firmware is debug-locked, so the original image cannot be read
-back. Flashing with an erase replaces it for good. Use a CC Debugger:
+Back up the stock firmware first (`cc-tool -r stock.hex`) if the chip is
+not debug-locked; flashing with an erase replaces it for good. Use a CC
+Debugger:
 
 ```sh
 cc-tool -e -w build/firmware/letv-remote-gp.hex -v
@@ -270,7 +277,8 @@ build if it does not fit. `tools/size.py` checks that the image fits the
   - with `GPD_PRESS_FLASH`, a 20-ms LED flash.
 - **Commissioning** keeps the radio busy for a while: 16 Channel Requests
   and an 18–40 ms receive window per attempt, up to 6 attempts per round
-  and 12 rounds. It only runs on the first start or on request.
+  and 12 rounds. It only runs on the first start, after a power-on or
+  RESET_N reset, or on request; a button press ends it early.
 
 ## Releases
 

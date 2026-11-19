@@ -16,7 +16,10 @@
  * before its first counter is used, and a restart continues after it.
  *
  * Channel: with no saved channel (first start), settings of another
- * firmware or the 3-s combo the device commissions: each of up to
+ * firmware, a power-on or RESET_N reset (GPD_RESET_COMMISSION: a battery
+ * insertion or a debugger reset; a sink without an open commissioning
+ * window ignores the frames) or the 3-s combo the device commissions:
+ * each of up to
  * GPD_COMMISSION_ROUNDS rounds (GPD_COMMISSION_PERIOD apart) first searches
  * the channel with GP Channel Requests (A.3.9.1: Auto-Commissioning 1 on
  * every channel, then 0 on the hint channel and a receive window there; a
@@ -104,6 +107,11 @@
 #if GPD_HEARTBEAT_CHAIN > 250u
 #error "GPD_HEARTBEAT_CHAIN must stay below half the 512-s Sleep Timer period"
 #endif
+/* Commission after a power-on or RESET_N reset even when paired, so the
+ * remote pairs again without its buttons (a watchdog restart does not). */
+#ifndef GPD_RESET_COMMISSION
+#define GPD_RESET_COMMISSION 1
+#endif
 /* A 20-ms green flash with the first transmission of each Press. */
 #ifndef GPD_PRESS_FLASH
 #define GPD_PRESS_FLASH 1
@@ -118,6 +126,9 @@
 #define SOC_SLEEPSTA_ADDRESS 0x9du
 #define SOC_STLOAD_ADDRESS 0xadu
 #define WDCTL_RESET 0x0bu
+/* SLEEPSTA.RST: 00 power-on or brown-out, 01 RESET_N, 10 watchdog, 11 clock loss. */
+#define SLEEPSTA_RST_MASK 0x18u
+#define SLEEPSTA_RST_WATCHDOG 0x10u
 /* Factory IEEE address in the information page, LSB first (SWRU191F 2.3.3). */
 #define INFO_IEEE 0x780cu
 /* SWRU191F 23.15 command strobes, RFIRQF0.RXPKTDONE, RFIRQF1.TXDONE,
@@ -590,7 +601,8 @@ static void buttons(void)
 
 void main(void)
 {
-    uint8_t i;
+    uint8_t i, fresh = GPD_RESET_COMMISSION
+        && (MMIO_READ(SOC_SLEEPSTA) & SLEEPSTA_RST_MASK) < SLEEPSTA_RST_WATCHDOG;
     letv_startup();
     S.stage = 1;
     if (clock_select_init(CLOCK_XOSC32, 1024, 4096, &clock_diagnostics) != CLOCK_OK) restart(1);
@@ -604,11 +616,11 @@ void main(void)
 #endif
     S.channel = settings.channel ? settings.channel : GPD_CHANNEL;
     letv_measure(&values);
+    if (!settings.channel || settings.profile != SETTINGS_PROFILE) fresh = 1;
 #if GPD_SECURITY
-    if (!settings.channel || settings.profile != SETTINGS_PROFILE || settings.keyed != 0xffu) {
-#else
-    if (!settings.channel || settings.profile != SETTINGS_PROFILE) {
+    if (settings.keyed != 0xffu) fresh = 1;
 #endif
+    if (fresh) {
         commission();
     } else {
         paired = 1;
