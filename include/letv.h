@@ -18,9 +18,12 @@
 #define LETV_BUTTONS() ((uint8_t)~MMIO_READ(SOC_P0))
 
 /* Interrupts off, LEDs off, the button inputs on their pull-ups and the
- * port 0 falling-edge interrupt armed (IEN1.P0IE, not yet IEN0.EA): the
- * first thing main does. */
+ * port 0 falling-edge interrupt configured but not enabled: the first
+ * thing main does. */
 void letv_startup(void);
+/* Enables the port 0 interrupt (IEN1.P0IE, not yet IEN0.EA); only after
+ * clock_select_init, which requires IEN0..IEN2 clear. */
+void letv_buttons_arm(void);
 /* LEDs: BOARD_LED_RED and/or BOARD_LED_GREEN on, all others off. */
 void letv_leds(uint8_t on);
 /* The LEDs that are on. */

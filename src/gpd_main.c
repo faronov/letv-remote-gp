@@ -594,6 +594,7 @@ void main(void)
     letv_startup();
     S.stage = 1;
     if (clock_select_init(CLOCK_XOSC32, 1024, 4096, &clock_diagnostics) != CLOCK_OK) restart(1);
+    letv_buttons_arm();
     for (i = 0; i < 8u; i++) ieee[i] = MMIO_XREAD(INFO_IEEE + i);
     gpd_source(S.src, ieee);
     S.seq = (uint8_t)(ieee[0] ^ MMIO_READ(SOC_ST0));

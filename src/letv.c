@@ -37,6 +37,12 @@ void letv_startup(void)
     MMIO_WRITE(SOC_P0IFG, 0);
     MMIO_CLEAR(SOC_IRCON, P0IF);
     MMIO_WRITE(SOC_P0IEN, BOARD_BUTTONS);
+}
+
+/* Separate from letv_startup: clock_select_init refuses to switch with any
+ * IEN0..IEN2 bit set (CLOCK_UNSUPPORTED_STATE). */
+void letv_buttons_arm(void)
+{
     MMIO_SET(SOC_IEN1, P0IE);
 }
 
