@@ -195,18 +195,28 @@ The quirk matches DeviceID 0x07, manufacturer 0x6D6B and model 0xF500. It
 adds:
 
 - eight button event entities (Back, Ring bottom, Ring right, Ring top,
-  Ring left, Mic, Play/Pause, Center). Their event types are:
-  - `press`;
-  - `release`;
-  - `short_press` (released less than 1 s after the press);
-  - `long_press` (held 1 s or more, fired on release).
+  Ring left, Mic, Play/Pause, Center). They use the standard button event
+  types of
+  [home-assistant/architecture#1502](https://github.com/home-assistant/architecture/discussions/1502):
 
-  Release events carry `duration` in seconds.
+  | Event type | When | Data |
+  |---|---|---|
+  | `press_start` | the button went down | |
+  | `press_end` | released less than 1 s after `press_start` | `duration` (s) |
+  | `long_press_start` | still down 1 s after `press_start`, once per hold | |
+  | `long_press_end` | released after `long_press_start` | `duration` (s) |
+  | `single_press` | one short press, no new press within 0.5 s of its release | |
+  | `multi_press` | 2 or more short presses, each within 0.5 s of the release before | `press_count` |
+
+  A long press ends a count and never counts itself. `single_press` and
+  `multi_press` come 0.5 s after the last release; automations that need
+  no double press can react to `press_end` without that delay.
 - the Battery (%) and Battery voltage (V) sensors, from Attribute Reporting
   or Multi-Cluster Reporting frames.
 
-The per-button state follows the bitmap of each frame, so repeated masks
-fire nothing. There is no `hold` event while a button is still down. The
+The GPD reports only the contact edges, so the quirk times the gestures
+itself (the standard leaves this to the device). The per-button state
+follows the bitmap of each frame, so repeated masks fire nothing. The
 Mic + OK gesture also fires its normal events.
 
 ## Flashing

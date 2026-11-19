@@ -1,10 +1,12 @@
 """Test the letv-remote-gp ZHA quirk against frames produced by include/gpd_frame.h."""
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
 
 from zha.application.platforms.event import EntityEventTriggeredEvent
+from zha.application.platforms.event.const import ButtonEventType
 from zha.const import STATE_CHANGED
 from zha.quirks import DEVICE_REGISTRY
 from zigpy.device import GreenPowerCommandReceived, GreenPowerDevice
@@ -32,20 +34,48 @@ MULTI_REPORT = bytes.fromhex("0100200020" "1e" "01002100" "20" "c8")
 NAMES = [suffix for suffix, _ in quirk.BUTTONS]
 
 
+class Timer:
+    def __init__(self, when: float, callback) -> None:
+        self.when, self.callback, self.cancelled = when, callback, False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
 class Clock:
-    """Monotonic clock for the press durations."""
+    """Monotonic clock and timer scheduler for the gestures."""
 
     def __init__(self) -> None:
         self.now = 1000.0
+        self.timers: list[Timer] = []
 
     def __call__(self) -> float:
         return self.now
+
+    def call_later(self, delay: float, callback) -> Timer:
+        timer = Timer(self.now + delay, callback)
+        self.timers.append(timer)
+        return timer
+
+    def pending(self) -> list[Timer]:
+        return [t for t in self.timers if not t.cancelled]
+
+    def advance(self, seconds: float) -> None:
+        """Move the clock, running the timers due on the way."""
+        end = self.now + seconds
+        while due := [t for t in self.pending() if t.when <= end]:
+            timer = min(due, key=lambda t: t.when)
+            self.timers.remove(timer)
+            self.now = timer.when
+            timer.callback()
+        self.now = end
 
 
 @pytest.fixture
 def remote(monkeypatch):
     clock = Clock()
     monkeypatch.setattr(quirk, "monotonic", clock)
+    monkeypatch.setattr(quirk, "call_later", clock.call_later)
     commissioning, rest = GPCommissioningPayload.deserialize(COMMISSIONING)
     assert rest == b""
     assert commissioning.device_id == DeviceID.GenericSwitch
@@ -112,7 +142,12 @@ def test_registry_and_names(remote):
     assert entities["battery_voltage"].translation_key == "letv_battery_voltage"
     for name in NAMES:
         assert entities[name].event_types == [
-            "press", "release", "short_press", "long_press"
+            ButtonEventType.PRESS_START,
+            ButtonEventType.PRESS_END,
+            ButtonEventType.LONG_PRESS_START,
+            ButtonEventType.LONG_PRESS_END,
+            ButtonEventType.SINGLE_PRESS,
+            ButtonEventType.MULTI_PRESS,
         ]
     gpd = GreenPowerDevice(
         MagicMock(), application_id=ApplicationID.SrcID, src_id=SrcID(1)
@@ -124,54 +159,112 @@ def test_registry_and_names(remote):
 
 
 @pytest.mark.parametrize("bit", range(8))
-def test_short_and_long_press(remote, bit):
+def test_single_and_long_press(remote, bit):
     gpd, _, events, clock = remote
     name = NAMES[bit]
+    # Binary-exact times, so the window and threshold edges are exact.
     press(gpd, 1 << bit)
-    clock.now += 0.3
+    clock.advance(0.25)
     release(gpd, 0)
-    clock.now += 2
+    clock.advance(0.375)
+    assert types(events, name) == ["press_start", "press_end"]
+    clock.advance(0.125)
+    assert types(events, name)[-1] == "single_press"
     press(gpd, 1 << bit)
-    clock.now += 1.0
+    clock.advance(0.875)
+    assert types(events, name)[-1] == "press_start"
+    clock.advance(0.125)
+    assert types(events, name)[-1] == "long_press_start"
+    clock.advance(0.5)
     release(gpd, 0)
+    clock.advance(2)
     assert events[name] == [
-        ("press", {}),
-        ("release", {"duration": 0.3}),
-        ("short_press", {"duration": 0.3}),
-        ("press", {}),
-        ("release", {"duration": 1.0}),
-        ("long_press", {"duration": 1.0}),
+        ("press_start", {}),
+        ("press_end", {"duration": 0.25}),
+        ("single_press", {}),
+        ("press_start", {}),
+        ("long_press_start", {}),
+        ("long_press_end", {"duration": 1.5}),
     ]
     assert all(events[n] == [] for n in NAMES if n != name)
+    assert clock.pending() == []
+
+
+def test_multi_press(remote):
+    gpd, _, events, clock = remote
+    for _ in range(3):
+        press(gpd, 0x01)
+        clock.advance(0.1)
+        release(gpd, 0x00)
+        clock.advance(0.45)
+    assert types(events, "back") == ["press_start", "press_end"] * 3
+    clock.advance(0.05)
+    assert events["back"][-1] == ("multi_press", {"press_count": 3})
+
+    # A long press ends the count at its hold threshold and never counts.
+    events["back"].clear()
+    press(gpd, 0x01)
+    clock.advance(0.1)
+    release(gpd, 0x00)
+    clock.advance(0.2)
+    press(gpd, 0x01)
+    clock.advance(1.0)
+    release(gpd, 0x00)
+    clock.advance(1)
+    assert types(events, "back") == [
+        "press_start", "press_end", "press_start",
+        "single_press", "long_press_start", "long_press_end",
+    ]
+
+    # Without the hold timer (a busy loop), the release still pairs the hold.
+    events["back"].clear()
+    press(gpd, 0x01)
+    clock.now += 1.2
+    for timer in clock.pending():
+        timer.cancel()
+    release(gpd, 0x00)
+    assert events["back"] == [
+        ("press_start", {}),
+        ("long_press_start", {}),
+        ("long_press_end", {"duration": 1.2}),
+    ]
 
 
 def test_duplicates_and_multi_bit_masks(remote):
-    gpd, _, events, clock = remote
+    gpd, entities, events, clock = remote
     press(gpd, 0x20)  # Mic
     press(gpd, 0x20)  # repeated frame, ignored
-    clock.now += 0.5
+    clock.advance(0.5)
     press(gpd, 0xA0)  # Center joins: the Mic + OK combo
     press(gpd, 0xA0)
-    clock.now += 3
+    clock.advance(3)
     release(gpd, 0x80)  # Mic released after 3.5 s
     release(gpd, 0x80)
-    clock.now += 0.2
+    clock.advance(0.2)
     release(gpd, 0x00)  # Center released after 3.2 s
     release(gpd, 0x00)
-    assert types(events, "mic") == ["press", "release", "long_press"]
-    assert types(events, "center") == ["press", "release", "long_press"]
-    assert events["mic"][1][1] == {"duration": 3.5}
-    assert events["center"][1][1] == {"duration": 3.2}
+    clock.advance(1)
+    for name in ("mic", "center"):
+        assert types(events, name) == ["press_start", "long_press_start", "long_press_end"]
+    assert events["mic"][2][1] == {"duration": 3.5}
+    assert events["center"][2][1] == {"duration": 3.2}
     assert all(events[n] == [] for n in NAMES if n not in ("mic", "center"))
 
     # A release frame for a button never seen pressed fires nothing, a press
     # with several new bits presses all of them.
     release(gpd, 0x00)
     press(gpd, 0x03)
-    clock.now += 0.1
+    clock.advance(0.1)
     release(gpd, 0x00)
-    assert types(events, "back") == ["press", "release", "short_press"]
-    assert types(events, "ring_bottom") == ["press", "release", "short_press"]
+    clock.advance(0.5)
+    for name in ("back", "ring_bottom"):
+        assert types(events, name) == ["press_start", "press_end", "single_press"]
+
+    # Removing the entity cancels its timers.
+    press(gpd, 0x01)
+    assert len(clock.pending()) == 1
+    asyncio.run(entities["back"].on_remove())
+    assert clock.pending() == []
 
 
 def test_battery_reports(remote):
