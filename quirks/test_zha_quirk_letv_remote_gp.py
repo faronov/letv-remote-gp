@@ -104,6 +104,12 @@ def test_registry_and_names(remote):
         "Back", "Ring bottom", "Ring right", "Ring top",
         "Ring left", "Mic", "Play/Pause", "Center",
     ]
+    # HA ZHA ignores fallback_name for an entity with a device class unless
+    # it also has a translation key HA has no translation for.
+    assert [entities[n].translation_key for n in NAMES] == [
+        f"letv_{n}" for n in NAMES
+    ]
+    assert entities["battery_voltage"].translation_key == "letv_battery_voltage"
     for name in NAMES:
         assert entities[name].event_types == [
             "press", "release", "short_press", "long_press"

@@ -176,6 +176,9 @@ for _bit, (_suffix, _name) in enumerate(BUTTONS):
         type(f"LetvButtonEvent{_bit + 1}", (LetvButtonEvent,), {"_bit": _bit}),
         unique_id_suffix=_suffix,
         fallback_name=_name,
+        # HA uses fallback_name for an entity with a device class only when
+        # its translation key has no HA translation.
+        translation_key=f"letv_{_suffix}",
     )
 (
     _builder.adds_entity(LetvBattery, unique_id_suffix="battery", fallback_name="Battery")
@@ -183,6 +186,7 @@ for _bit, (_suffix, _name) in enumerate(BUTTONS):
         LetvBatteryVoltage,
         unique_id_suffix="battery_voltage",
         fallback_name="Battery voltage",
+        translation_key="letv_battery_voltage",
     )
     .friendly_name(manufacturer="LeTV", model="GP remote")
     .add_to_registry()
